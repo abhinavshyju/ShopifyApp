@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "48bf40a29fdb5b63ff405fdb694a562f"
-name = "MagicalCX"
+name = "sustainable-consumer-app"
 application_url = "https://example.com"
 embedded = true
 
@@ -13,16 +13,17 @@ include_config_on_deploy = true
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
-
-  [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,read_orders,read_customers,read_locations"
+scopes = "write_products,read_orders,read_customers,read_locations,write_orders"
+
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]

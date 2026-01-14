@@ -7,6 +7,15 @@ interface TrackOrderParams {
   email?: string;
 }
 
+interface CancelOrderParams {
+  shop: string;
+  orderId: string;
+  reason: "CUSTOMER" | "DECLINED" | "FRAUD" | "INVENTORY" | "OTHER";
+  restock: boolean;
+  notifyCustomer?: boolean;
+  staffNote?: string;
+}
+
 const TRACK_ORDER_BY_ID_QUERY = `
   query trackOrderById($id: ID!) {
     order(id: $id) {
@@ -16,6 +25,10 @@ const TRACK_ORDER_BY_ID_QUERY = `
       createdAt
       displayFulfillmentStatus
       confirmationNumber
+      cancelledAt
+      cancelReason
+      closedAt
+
 
       subtotalPriceSet {
         shopMoney {
@@ -156,6 +169,9 @@ const TRACK_ORDER_BY_NAME_QUERY = `
             createdAt
             displayFulfillmentStatus
             confirmationNumber
+            cancelledAt
+            cancelReason
+            closedAt
 
             subtotalPriceSet {
               shopMoney {
@@ -290,6 +306,9 @@ const TRACK_ORDER_BY_EMAIL_QUERY = `
           createdAt
           displayFulfillmentStatus
           confirmationNumber
+          cancelledAt
+          cancelReason
+          closedAt
 
           subtotalPriceSet { shopMoney { amount currencyCode } }
           totalShippingPriceSet { shopMoney { amount currencyCode } }
@@ -339,6 +358,23 @@ const TRACK_ORDER_BY_EMAIL_QUERY = `
     }
   }
 `;
+
+const ORDER_CANCEL_MUTATION = `
+  mutation orderCancel($orderId: ID!, $reason: OrderCancelReason!, $restock: Boolean!, $notifyCustomer: Boolean, $staffNote: String) {
+    orderCancel(orderId: $orderId, reason: $reason, restock: $restock, notifyCustomer: $notifyCustomer, staffNote: $staffNote) {
+      job {
+        id
+        done
+      }
+      orderCancelUserErrors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
 class OrderService {
   trackOrder = async ({
     shop,
@@ -400,15 +436,64 @@ class OrderService {
     throw new Error("Invalid tracking parameters");
   };
 
+  cancelOrder = async ({
+    shop,
+    orderId,
+    reason,
+    restock,
+    notifyCustomer = false,
+    staffNote,
+  }: CancelOrderParams) => {
+    const { admin } = await unauthenticated.admin(shop);
+
+    if (!orderId) {
+      throw new Error("Order ID is required");
+    }
+
+    const res = await admin.graphql(ORDER_CANCEL_MUTATION, {
+      variables: {
+        orderId,
+        reason,
+        restock,
+        notifyCustomer,
+        staffNote: staffNote || null,
+      },
+    });
+
+    const json = (await res.json()) as any;
+    const result = json.data?.orderCancel;
+
+    if (!result) {
+      throw new Error("Failed to cancel order");
+    }
+
+    if (result.orderCancelUserErrors?.length > 0) {
+      const errors = result.orderCancelUserErrors
+        .map((e: any) => `${e.field}: ${e.message}`)
+        .join(", ");
+      throw new Error(`Order cancellation failed: ${errors}`);
+    }
+
+    return {
+      jobId: result.job?.id ?? null,
+      done: result.job?.done ?? false,
+    };
+  };
+
   private formatTracking(order: any) {
     const fulfillments = order.fulfillments ?? [];
 
     return {
+      orderId: order.id ?? null,
       orderNumber: order.name?.replace("#", "") ?? null,
       confirmationNumber: order.confirmationNumber ?? null,
       email: order.email ?? null,
       createdAt: order.createdAt ?? null,
       fulfillmentStatus: order.displayFulfillmentStatus ?? null,
+      reason: order.cancelReason ?? null,
+      cancelled: order.cancelledAt ? true : false,
+      cancelledAt: order.cancelledAt ?? null,
+      closedAt: order.closedAt ?? null,
 
       pricing: {
         subtotal: order.subtotalPriceSet?.shopMoney ?? null,
