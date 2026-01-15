@@ -4,7 +4,7 @@ import { magicalCXClient } from "lib/clients/axios-client";
 
 class ConnectionService {
   connectToMagicalCX = async (payload: MagicalCXConnectPayload) => {
-    const response = await magicalCXClient.post("/shopify", payload);
+    const response = await magicalCXClient.post("/shopify-webhook", payload);
     return response.data as {
       success: boolean;
       data: {
@@ -27,7 +27,10 @@ class ConnectionService {
     shop: string;
     wid: string;
   }) => {
-    const response = await magicalCXClient.put(`/shopify`, { shop, wid });
+    const response = await magicalCXClient.put(`/shopify-webhook`, {
+      shop,
+      wid,
+    });
     return response.data;
   };
 

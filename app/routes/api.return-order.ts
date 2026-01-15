@@ -3,11 +3,11 @@ import { successResponse, errorResponse } from "../../lib/utils/api-response";
 import { validateApiKey } from "../../lib/utils/validate-api-key";
 import orderService from "../../lib/services/order-service";
 
-interface CancelOrderRequest {
+interface ReturnOrderRequest {
   shop: string;
   orderId?: string;
   orderNumber?: string;
-  staffNote?: string;
+  returnReasonNote?: string;
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -22,8 +22,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { shop, orderId, orderNumber, staffNote } =
-      body as CancelOrderRequest;
+    const { shop, orderId, orderNumber, returnReasonNote } =
+      body as ReturnOrderRequest;
 
     if (!shop) {
       return errorResponse("Shop is required", 400);
@@ -33,25 +33,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return errorResponse("Either orderId or orderNumber is required", 400);
     }
 
-    const cancellationReason = "CUSTOMER";
-    const shouldRestock = true;
-    const notifyCustomer = true;
-    const staffNoteValue = staffNote || "Order cancelled by API";
-
-    const result = await orderService.cancelOrder({
+    const result = await orderService.createReturn({
       shop,
       orderId,
       orderNumber,
-      reason: cancellationReason,
-      restock: shouldRestock,
-      notifyCustomer,
-      staffNote: staffNoteValue,
+      returnReasonNote,
     });
 
-    return successResponse(result, "Order cancellation initiated successfully");
+    return successResponse(result);
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : "Failed to cancel order";
+      error instanceof Error ? error.message : "Failed to create return";
     const statusCode = (error as { status?: number })?.status ?? 500;
 
     return errorResponse(errorMessage, statusCode);

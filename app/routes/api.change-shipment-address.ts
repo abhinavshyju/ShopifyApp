@@ -3,11 +3,21 @@ import { successResponse, errorResponse } from "../../lib/utils/api-response";
 import { validateApiKey } from "../../lib/utils/validate-api-key";
 import orderService from "../../lib/services/order-service";
 
-interface CancelOrderRequest {
+interface ChangeShipmentAddressRequest {
   shop: string;
-  orderId?: string;
-  orderNumber?: string;
-  staffNote?: string;
+  orderId: string;
+  shippingAddress: {
+    firstName?: string;
+    lastName?: string;
+    address1?: string;
+    address2?: string;
+    city?: string;
+    provinceCode?: string;
+    countryCode?: string;
+    zip?: string;
+    phone?: string;
+    company?: string;
+  };
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -22,38 +32,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { shop, orderId, orderNumber, staffNote } =
-      body as CancelOrderRequest;
+    const { shop, orderId, shippingAddress } =
+      body as ChangeShipmentAddressRequest;
 
     if (!shop) {
       return errorResponse("Shop is required", 400);
     }
 
-    if (!orderId && !orderNumber) {
-      return errorResponse("Either orderId or orderNumber is required", 400);
+    if (!orderId) {
+      return errorResponse("Order ID is required", 400);
     }
 
-    const cancellationReason = "CUSTOMER";
-    const shouldRestock = true;
-    const notifyCustomer = true;
-    const staffNoteValue = staffNote || "Order cancelled by API";
+    if (!shippingAddress) {
+      return errorResponse("Shipping address is required", 400);
+    }
 
-    const result = await orderService.cancelOrder({
+    const result = await orderService.updateShippingAddress({
       shop,
       orderId,
-      orderNumber,
-      reason: cancellationReason,
-      restock: shouldRestock,
-      notifyCustomer,
-      staffNote: staffNoteValue,
+      shippingAddress,
     });
 
-    return successResponse(result, "Order cancellation initiated successfully");
+    return successResponse(
+      result,
+      "Shipping address updated successfully",
+    );
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : "Failed to cancel order";
+      error instanceof Error
+        ? error.message
+        : "Failed to update shipping address";
     const statusCode = (error as { status?: number })?.status ?? 500;
 
     return errorResponse(errorMessage, statusCode);
   }
 };
+

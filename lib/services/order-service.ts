@@ -9,11 +9,60 @@ interface TrackOrderParams {
 
 interface CancelOrderParams {
   shop: string;
-  orderId: string;
+  orderId?: string;
+  orderNumber?: string;
   reason: "CUSTOMER" | "DECLINED" | "FRAUD" | "INVENTORY" | "OTHER";
   restock: boolean;
   notifyCustomer?: boolean;
   staffNote?: string;
+}
+
+interface UpdateShippingAddressParams {
+  shop: string;
+  orderId: string;
+  shippingAddress: {
+    firstName?: string;
+    lastName?: string;
+    address1?: string;
+    address2?: string;
+    city?: string;
+    provinceCode?: string;
+    countryCode?: string;
+    zip?: string;
+    phone?: string;
+    company?: string;
+  };
+}
+
+interface CreateReturnParams {
+  shop: string;
+  orderId?: string;
+  orderNumber?: string;
+  returnLineItems?: Array<{
+    fulfillmentLineItemId: string;
+    quantity: number;
+    returnReasonNote?: string;
+  }>;
+  returnReasonNote?: string;
+  notifyCustomer?: boolean;
+}
+
+interface CreateRefundParams {
+  shop: string;
+  orderId?: string;
+  orderNumber?: string;
+  refundLineItems?: Array<{
+    lineItemId: string;
+    quantity: number;
+    restockType?: "CANCEL" | "NO_RESTOCK" | "RETURN";
+    locationId?: string;
+  }>;
+  shipping?: {
+    amount?: string;
+    fullRefund?: boolean;
+  };
+  note?: string;
+  notifyCustomer?: boolean;
 }
 
 const TRACK_ORDER_BY_ID_QUERY = `
@@ -157,8 +206,8 @@ const TRACK_ORDER_BY_ID_QUERY = `
   }
 `;
 
-const TRACK_ORDER_BY_NAME_QUERY = `
-  query trackOrderByName($query: String!) {
+const TRACK_ORDER_BY_ORDER_NUMBER = `
+  query trackOrderByOrderNumber($query: String!) {
     orders(first: 1, query: $query) {
       edges {
         node {
@@ -375,7 +424,121 @@ const ORDER_CANCEL_MUTATION = `
   }
 `;
 
+const ORDER_UPDATE_MUTATION = `
+  mutation orderUpdate($input: OrderInput!) {
+    orderUpdate(input: $input) {
+      order {
+        id
+        name
+        shippingAddress {
+          firstName
+          lastName
+          address1
+          address2
+          city
+          provinceCode
+          countryCode
+          zip
+          phone
+          company
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const RETURN_CREATE_MUTATION = `
+  mutation returnCreate($returnInput: ReturnInput!) {
+    returnCreate(returnInput: $returnInput) {
+      return {
+        id
+        status
+        order {
+          id
+          name
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const REFUND_CREATE_MUTATION = `
+  mutation refundCreate($input: RefundInput!) {
+    refundCreate(input: $input) {
+      refund {
+        id
+        createdAt
+        totalRefundedSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
+const ORDER_ID_BY_NUMBER_QUERY = `
+  query getOrderIdByNumber($query: String!) {
+    orders(first: 1, query: $query) {
+      edges {
+        node {
+          id
+        }
+      }
+    }
+  }
+`;
+
 class OrderService {
+  private resolveOrderId = async ({
+    shop,
+    orderId,
+    orderNumber,
+  }: {
+    shop: string;
+    orderId?: string;
+    orderNumber?: string;
+  }): Promise<string> => {
+    if (orderId) {
+      return orderId;
+    }
+
+    if (!orderNumber) {
+      throw new Error("Either orderId or orderNumber is required");
+    }
+
+    const { admin } = await unauthenticated.admin(shop);
+
+    const res = await admin.graphql(ORDER_ID_BY_NUMBER_QUERY, {
+      variables: {
+        query: `name:${orderNumber}`,
+      },
+    });
+
+    const json = (await res.json()) as any;
+    const resolvedOrderId = json.data?.orders?.edges?.[0]?.node?.id;
+
+    if (!resolvedOrderId) {
+      throw new Error(`Order not found with order number: ${orderNumber}`);
+    }
+
+    return resolvedOrderId;
+  };
+
   trackOrder = async ({
     shop,
     orderId,
@@ -402,7 +565,7 @@ class OrderService {
     }
 
     if (orderNumber) {
-      const res = await admin.graphql(TRACK_ORDER_BY_NAME_QUERY, {
+      const res = await admin.graphql(TRACK_ORDER_BY_ORDER_NUMBER, {
         variables: {
           query: `name:${orderNumber}`,
         },
@@ -439,20 +602,23 @@ class OrderService {
   cancelOrder = async ({
     shop,
     orderId,
+    orderNumber,
     reason,
     restock,
-    notifyCustomer = false,
+    notifyCustomer = true,
     staffNote,
   }: CancelOrderParams) => {
-    const { admin } = await unauthenticated.admin(shop);
+    const resolvedOrderId = await this.resolveOrderId({
+      shop,
+      orderId,
+      orderNumber,
+    });
 
-    if (!orderId) {
-      throw new Error("Order ID is required");
-    }
+    const { admin } = await unauthenticated.admin(shop);
 
     const res = await admin.graphql(ORDER_CANCEL_MUTATION, {
       variables: {
-        orderId,
+        orderId: resolvedOrderId,
         reason,
         restock,
         notifyCustomer,
@@ -477,6 +643,201 @@ class OrderService {
     return {
       jobId: result.job?.id ?? null,
       done: result.job?.done ?? false,
+    };
+  };
+
+  updateShippingAddress = async ({
+    shop,
+    orderId,
+    shippingAddress,
+  }: UpdateShippingAddressParams) => {
+    const { admin } = await unauthenticated.admin(shop);
+
+    if (!orderId) {
+      throw new Error("Order ID is required");
+    }
+
+    const res = await admin.graphql(ORDER_UPDATE_MUTATION, {
+      variables: {
+        input: {
+          id: orderId,
+          shippingAddress,
+        },
+      },
+    });
+
+    const json = (await res.json()) as any;
+    const result = json.data?.orderUpdate;
+
+    if (!result) {
+      throw new Error("Failed to update shipping address");
+    }
+
+    if (result.userErrors?.length > 0) {
+      const errors = result.userErrors
+        .map((e: any) => `${e.field}: ${e.message}`)
+        .join(", ");
+      throw new Error(`Shipping address update failed: ${errors}`);
+    }
+
+    return {
+      orderId: result.order?.id ?? null,
+      orderName: result.order?.name ?? null,
+      shippingAddress: result.order?.shippingAddress ?? null,
+    };
+  };
+
+  createReturn = async ({
+    shop,
+    orderId,
+    orderNumber,
+    returnLineItems,
+    returnReasonNote,
+    notifyCustomer = false,
+  }: CreateReturnParams) => {
+    const resolvedOrderId = await this.resolveOrderId({
+      shop,
+      orderId,
+      orderNumber,
+    });
+
+    const { admin } = await unauthenticated.admin(shop);
+
+    let itemsToReturn = returnLineItems;
+
+    // Auto-fetch all fulfillment line items if not provided
+    if (!itemsToReturn || itemsToReturn.length === 0) {
+      const orderData = await this.trackOrder({
+        shop,
+        orderId: resolvedOrderId,
+      });
+
+      const allFulfillmentLineItems: Array<{
+        fulfillmentLineItemId: string;
+        quantity: number;
+        returnReasonNote?: string;
+      }> = [];
+
+      for (const shipment of orderData.shipments ?? []) {
+        for (const product of shipment.products ?? []) {
+          if (product.fulfillmentLineItemId && product.quantity > 0) {
+            allFulfillmentLineItems.push({
+              fulfillmentLineItemId: product.fulfillmentLineItemId,
+              quantity: product.quantity,
+              returnReasonNote: returnReasonNote || undefined,
+            });
+          }
+        }
+      }
+
+      if (allFulfillmentLineItems.length === 0) {
+        throw new Error("No fulfilled items available to return");
+      }
+
+      itemsToReturn = allFulfillmentLineItems;
+    }
+
+    const res = await admin.graphql(RETURN_CREATE_MUTATION, {
+      variables: {
+        returnInput: {
+          orderId: resolvedOrderId,
+          returnLineItems: itemsToReturn.map((item) => ({
+            fulfillmentLineItemId: item.fulfillmentLineItemId,
+            quantity: item.quantity,
+            returnReasonNote: item.returnReasonNote || returnReasonNote || null,
+          })),
+        },
+      },
+    });
+
+    const json = (await res.json()) as any;
+    const result = json.data?.returnCreate;
+
+    if (!result) {
+      throw new Error("Failed to create return");
+    }
+
+    if (result.userErrors?.length > 0) {
+      const errors = result.userErrors
+        .map((e: any) => `${e.field}: ${e.message}`)
+        .join(", ");
+      throw new Error(`Return creation failed: ${errors}`);
+    }
+
+    return {
+      returnId: result.return?.id ?? null,
+      status: result.return?.status ?? null,
+      orderId: result.return?.order?.id ?? null,
+      orderName: result.return?.order?.name ?? null,
+    };
+  };
+
+  createRefund = async ({
+    shop,
+    orderId,
+    orderNumber,
+    refundLineItems,
+    shipping,
+    note,
+    notifyCustomer = false,
+  }: CreateRefundParams) => {
+    const resolvedOrderId = await this.resolveOrderId({
+      shop,
+      orderId,
+      orderNumber,
+    });
+
+    const { admin } = await unauthenticated.admin(shop);
+
+    const refundInput: any = {
+      orderId: resolvedOrderId,
+      notify: notifyCustomer,
+    };
+
+    if (refundLineItems && refundLineItems.length > 0) {
+      refundInput.refundLineItems = refundLineItems.map((item) => ({
+        lineItemId: item.lineItemId,
+        quantity: item.quantity,
+        restockType: item.restockType || null,
+        locationId: item.locationId || null,
+      }));
+    }
+
+    if (shipping) {
+      refundInput.shipping = {
+        fullRefund: shipping.fullRefund ?? false,
+        ...(shipping.amount && { amount: shipping.amount }),
+      };
+    }
+
+    if (note) {
+      refundInput.note = note;
+    }
+
+    const res = await admin.graphql(REFUND_CREATE_MUTATION, {
+      variables: {
+        input: refundInput,
+      },
+    });
+
+    const json = (await res.json()) as any;
+    const result = json.data?.refundCreate;
+
+    if (!result) {
+      throw new Error("Failed to create refund");
+    }
+
+    if (result.userErrors?.length > 0) {
+      const errors = result.userErrors
+        .map((e: any) => `${e.field}: ${e.message}`)
+        .join(", ");
+      throw new Error(`Refund creation failed: ${errors}`);
+    }
+
+    return {
+      refundId: result.refund?.id ?? null,
+      createdAt: result.refund?.createdAt ?? null,
+      totalRefunded: result.refund?.totalRefundedSet?.shopMoney ?? null,
     };
   };
 
@@ -523,6 +884,7 @@ class OrderService {
               e.node.lineItem?.originalUnitPriceSet?.shopMoney;
 
             return {
+              fulfillmentLineItemId: e.node.id ?? null,
               title: e.node.lineItem?.title ?? null,
               quantity: e.node.quantity ?? 0,
 
