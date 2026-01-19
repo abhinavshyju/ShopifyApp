@@ -47,22 +47,25 @@ interface CreateReturnParams {
   notifyCustomer?: boolean;
 }
 
-interface CreateRefundParams {
+interface CreateReturnRequestParams {
   shop: string;
   orderId?: string;
   orderNumber?: string;
-  refundLineItems?: Array<{
-    lineItemId: string;
+  returnLineItems?: Array<{
+    fulfillmentLineItemId: string;
     quantity: number;
-    restockType?: "CANCEL" | "NO_RESTOCK" | "RETURN";
-    locationId?: string;
+    returnReasonDefinitionId?: string;
+    customerNote?: string;
+    restockingFee?: {
+      percentage: number;
+    };
   }>;
-  shipping?: {
-    amount?: string;
-    fullRefund?: boolean;
+  returnShippingFee?: {
+    amount: {
+      amount: string;
+      currencyCode: string;
+    };
   };
-  note?: string;
-  notifyCustomer?: boolean;
 }
 
 const TRACK_ORDER_BY_ID_QUERY = `
@@ -470,18 +473,14 @@ const RETURN_CREATE_MUTATION = `
   }
 `;
 
-const REFUND_CREATE_MUTATION = `
-  mutation refundCreate($input: RefundInput!) {
-    refundCreate(input: $input) {
-      refund {
+const RETURN_REQUEST_MUTATION = `
+  mutation returnRequest($input: ReturnRequestInput!) {
+    returnRequest(input: $input) {
+      return {
         id
+        name
+        status
         createdAt
-        totalRefundedSet {
-          shopMoney {
-            amount
-            currencyCode
-          }
-        }
       }
       userErrors {
         field
@@ -772,15 +771,13 @@ class OrderService {
     };
   };
 
-  createRefund = async ({
+  createReturnRequest = async ({
     shop,
     orderId,
     orderNumber,
-    refundLineItems,
-    shipping,
-    note,
-    notifyCustomer = false,
-  }: CreateRefundParams) => {
+    returnLineItems,
+    returnShippingFee,
+  }: CreateReturnRequestParams) => {
     const resolvedOrderId = await this.resolveOrderId({
       shop,
       orderId,
@@ -789,55 +786,49 @@ class OrderService {
 
     const { admin } = await unauthenticated.admin(shop);
 
-    const refundInput: any = {
+    const returnRequestInput: any = {
       orderId: resolvedOrderId,
-      notify: notifyCustomer,
     };
 
-    if (refundLineItems && refundLineItems.length > 0) {
-      refundInput.refundLineItems = refundLineItems.map((item) => ({
-        lineItemId: item.lineItemId,
+    if (returnLineItems && returnLineItems.length > 0) {
+      returnRequestInput.returnLineItems = returnLineItems.map((item) => ({
+        fulfillmentLineItemId: item.fulfillmentLineItemId,
         quantity: item.quantity,
-        restockType: item.restockType || null,
-        locationId: item.locationId || null,
+        ...(item.returnReasonDefinitionId && { returnReasonDefinitionId: item.returnReasonDefinitionId }),
+        ...(item.customerNote && { customerNote: item.customerNote }),
+        ...(item.restockingFee && { restockingFee: item.restockingFee }),
       }));
     }
 
-    if (shipping) {
-      refundInput.shipping = {
-        fullRefund: shipping.fullRefund ?? false,
-        ...(shipping.amount && { amount: shipping.amount }),
-      };
+    if (returnShippingFee) {
+      returnRequestInput.returnShippingFee = returnShippingFee;
     }
 
-    if (note) {
-      refundInput.note = note;
-    }
-
-    const res = await admin.graphql(REFUND_CREATE_MUTATION, {
+    const res = await admin.graphql(RETURN_REQUEST_MUTATION, {
       variables: {
-        input: refundInput,
+        input: returnRequestInput,
       },
     });
 
     const json = (await res.json()) as any;
-    const result = json.data?.refundCreate;
+    const result = json.data?.returnRequest;
 
     if (!result) {
-      throw new Error("Failed to create refund");
+      throw new Error("Failed to create return request");
     }
 
     if (result.userErrors?.length > 0) {
       const errors = result.userErrors
         .map((e: any) => `${e.field}: ${e.message}`)
         .join(", ");
-      throw new Error(`Refund creation failed: ${errors}`);
+      throw new Error(`Return request creation failed: ${errors}`);
     }
 
     return {
-      refundId: result.refund?.id ?? null,
-      createdAt: result.refund?.createdAt ?? null,
-      totalRefunded: result.refund?.totalRefundedSet?.shopMoney ?? null,
+      returnId: result.return?.id ?? null,
+      name: result.return?.name ?? null,
+      status: result.return?.status ?? null,
+      createdAt: result.return?.createdAt ?? null,
     };
   };
 

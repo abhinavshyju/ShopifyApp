@@ -3,12 +3,22 @@ import { successResponse, errorResponse } from "../../lib/utils/api-response";
 import { validateApiKey } from "../../lib/utils/validate-api-key";
 import orderService from "../../lib/services/order-service";
 
-interface RefundOrderRequest {
+interface ReturnRequestOrderRequest {
   shop: string;
   orderId?: string;
   orderNumber?: string;
-  note?: string;
-  fullRefund?: boolean;
+  returnLineItems?: Array<{
+    fulfillmentLineItemId: string;
+    quantity: number;
+    returnReasonDefinitionId?: string;
+    customerNote?: string;
+  }>;
+  returnShippingFee?: {
+    amount: {
+      amount: string;
+      currencyCode: string;
+    };
+  };
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -27,9 +37,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shop,
       orderId,
       orderNumber,
-      note,
-      fullRefund = true,
-    } = body as RefundOrderRequest;
+      returnLineItems,
+      returnShippingFee,
+    } = body as ReturnRequestOrderRequest;
 
     if (!shop) {
       return errorResponse("Shop is required", 400);
@@ -39,18 +49,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return errorResponse("Either orderId or orderNumber is required", 400);
     }
 
-    const result = await orderService.createRefund({
+    const result = await orderService.createReturnRequest({
       shop,
       orderId,
       orderNumber,
-      note,
-      shipping: fullRefund ? { fullRefund: true } : undefined,
+      returnLineItems,
+      returnShippingFee,
     });
 
     return successResponse(result);
   } catch (error) {
     const errorMessage =
-      error instanceof Error ? error.message : "Failed to create refund";
+      error instanceof Error ? error.message : "Failed to create return request";
     const statusCode = (error as { status?: number })?.status ?? 500;
 
     return errorResponse(errorMessage, statusCode);
